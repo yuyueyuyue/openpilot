@@ -4,7 +4,7 @@ import numpy as np
 from cereal import log
 import cereal.messaging as messaging
 from selfdrive.config import Conversions as CV
-from selfdrive.controls.lib.planner import calc_cruise_accel_limits
+from selfdrive.controls.lib.longitudinal_planner import calc_cruise_accel_limits
 from selfdrive.controls.lib.speed_smoother import speed_smoother
 from selfdrive.controls.lib.long_mpc import LongitudinalMpc
 
@@ -46,8 +46,7 @@ def run_following_distance_simulation(v_lead, t_end=200.0):
                                         dt)
 
     # Setup CarState
-    CS = messaging.new_message()
-    CS.init('carState')
+    CS = messaging.new_message('carState')
     CS.carState.vEgo = v_ego
     CS.carState.aEgo = a_ego
 
@@ -62,8 +61,10 @@ def run_following_distance_simulation(v_lead, t_end=200.0):
     mpc.set_cur_state(v_ego, a_ego)
     if first:  # Make sure MPC is converged on first timestep
       for _ in range(20):
-        mpc.update(pm, CS.carState, lead, v_cruise_setpoint)
-    mpc.update(pm, CS.carState, lead, v_cruise_setpoint)
+        mpc.update(CS.carState, lead)
+        mpc.publish(pm)
+    mpc.update(CS.carState, lead)
+    mpc.publish(pm)
 
     # Choose slowest of two solutions
     if v_cruise < mpc.v_mpc:

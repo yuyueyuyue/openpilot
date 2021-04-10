@@ -1,12 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <signal.h>
-#include <cassert>
+#include <sys/resource.h>
 
-#include "common/visionbuf.h"
-#include "common/visionipc.h"
+#include "visionipc_client.h"
 #include "common/swaglog.h"
+#include "common/util.h"
 
 #include "models/dmonitoring.h"
 
@@ -14,67 +12,47 @@
 #include <linux/limits.h>
 #endif
 
+ExitHandler do_exit;
 
-volatile sig_atomic_t do_exit = 0;
+void run_model(DMonitoringModelState &model, VisionIpcClient &vipc_client) {
+  PubMaster pm({"driverState"});
+  double last = 0;
 
-static void set_do_exit(int sig) {
-  do_exit = 1;
+  while (!do_exit) {
+    VisionIpcBufExtra extra = {};
+    VisionBuf *buf = vipc_client.recv(&extra);
+    if (buf == nullptr) continue;
+
+    double t1 = millis_since_boot();
+    DMonitoringResult res = dmonitoring_eval_frame(&model, buf->addr, buf->width, buf->height);
+    double t2 = millis_since_boot();
+
+    // send dm packet
+    dmonitoring_publish(pm, extra.frame_id, res, (t2 - t1) / 1000.0, model.output);
+
+    //printf("dmonitoring process: %.2fms, from last %.2fms\n", t2 - t1, t1 - last);
+    last = t1;
+  }
 }
 
 int main(int argc, char **argv) {
-  int err;
-  set_realtime_priority(1);
-
-  // messaging
-  Context *msg_context = Context::create();
-  PubSocket *dmonitoring_sock = PubSocket::create(msg_context, "driverState");
+  setpriority(PRIO_PROCESS, 0, -15);
 
   // init the models
-  DMonitoringModelState dmonitoringmodel;
-  dmonitoring_init(&dmonitoringmodel);
+  DMonitoringModelState model;
+  dmonitoring_init(&model);
 
-  // loop
-  VisionStream stream;
-  while (!do_exit) {
-    VisionStreamBufs buf_info;
-    err = visionstream_init(&stream, VISION_STREAM_YUV_FRONT, true, &buf_info);
-    if (err) {
-      printf("visionstream connect fail\n");
-      usleep(100000);
-      continue;
-    }
-    LOGW("connected with buffer size: %d", buf_info.buf_len);
-
-    double last = 0;
-    while (!do_exit) {
-      VIPCBuf *buf;
-      VIPCBufExtra extra;
-      buf = visionstream_get(&stream, &extra);
-      if (buf == NULL) {
-        printf("visionstream get failed\n");
-        break;
-      }
-      //printf("frame_id: %d %dx%d\n", extra.frame_id, buf_info.width, buf_info.height);
-
-      double t1 = millis_since_boot();
-
-      DMonitoringResult res = dmonitoring_eval_frame(&dmonitoringmodel, buf->addr, buf_info.width, buf_info.height);
-
-      double t2 = millis_since_boot();
-
-      // send dm packet
-      dmonitoring_publish(dmonitoring_sock, extra.frame_id, res);
-
-      LOGD("dmonitoring process: %.2fms, from last %.2fms", t2-t1, t1-last);
-      last = t1;
-    }
-
+  VisionIpcClient vipc_client = VisionIpcClient("camerad", VISION_STREAM_YUV_FRONT, true);
+  while (!do_exit && !vipc_client.connect(false)) {
+    util::sleep_for(100);
   }
 
-  visionstream_destroy(&stream);
+  // run the models
+  if (vipc_client.connected) {
+    LOGW("connected with buffer size: %d", vipc_client.buffers[0].len);
+    run_model(model, vipc_client);
+  }
 
-  delete dmonitoring_sock;
-  dmonitoring_free(&dmonitoringmodel);
-
+  dmonitoring_free(&model);
   return 0;
 }

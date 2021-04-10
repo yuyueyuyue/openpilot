@@ -25,9 +25,9 @@ class Maneuver():
   def evaluate(self):
     """runs the plant sim and returns (score, run_data)"""
     plant = Plant(
-      lead_relevancy = self.lead_relevancy,
-      speed = self.speed,
-      distance_lead = self.distance_lead
+      lead_relevancy=self.lead_relevancy,
+      speed=self.speed,
+      distance_lead=self.distance_lead
     )
 
     logs = defaultdict(list)
@@ -68,7 +68,6 @@ class Maneuver():
           d_rel=d_rel, v_rel=v_rel, v_lead=speed_lead,
           v_target_lead=last_controls_state.vTargetLead, pid_speed=last_controls_state.vPid,
           cruise_speed=last_controls_state.vCruise,
-          jerk_factor=last_controls_state.jerkFactor,
           a_target=last_controls_state.aTarget,
           fcw=log['fcw'])
 

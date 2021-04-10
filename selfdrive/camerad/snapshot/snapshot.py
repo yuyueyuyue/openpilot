@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 import os
-import json
 import signal
 import subprocess
 import time
+
+import numpy as np
 from PIL import Image
+
+import cereal.messaging as messaging
 from common.basedir import BASEDIR
 from common.params import Params
-from selfdrive.camerad.snapshot.visionipc import VisionIPC
-
-with open(BASEDIR + "/selfdrive/controls/lib/alerts_offroad.json") as json_file:
-   OFFROAD_ALERTS = json.load(json_file)
+from common.transformations.camera import eon_f_frame_size, eon_d_frame_size, leon_d_frame_size, tici_f_frame_size
+from selfdrive.hardware import TICI
+from selfdrive.controls.lib.alertmanager import set_offroad_alert
 
 
 def jpeg_write(fn, dat):
@@ -18,55 +20,89 @@ def jpeg_write(fn, dat):
   img.save(fn, "JPEG")
 
 
+def extract_image(dat, frame_sizes):
+  img = np.frombuffer(dat, dtype=np.uint8)
+  w, h = frame_sizes[len(img) // 3]
+  b = img[::3].reshape(h, w)
+  g = img[1::3].reshape(h, w)
+  r = img[2::3].reshape(h, w)
+  return np.dstack([r, g, b])
+
+
+def get_snapshots(frame="roadCameraState", front_frame="driverCameraState"):
+  frame_sizes = [eon_f_frame_size, eon_d_frame_size, leon_d_frame_size, tici_f_frame_size]
+  frame_sizes = {w * h: (w, h) for (w, h) in frame_sizes}
+
+  sockets = []
+  if frame is not None:
+    sockets.append(frame)
+  if front_frame is not None:
+    sockets.append(front_frame)
+
+  sm = messaging.SubMaster(sockets)
+  while min(sm.logMonoTime.values()) == 0:
+    sm.update()
+
+  rear = extract_image(sm[frame].image, frame_sizes) if frame is not None else None
+  front = extract_image(sm[front_frame].image, frame_sizes) if front_frame is not None else None
+  return rear, front
+
+
 def snapshot():
   params = Params()
-  front_camera_allowed = int(params.get("RecordFront"))
+  front_camera_allowed = params.get_bool("RecordFront")
 
-  params.put("IsTakingSnapshot", "1")
-  params.put("Offroad_IsTakingSnapshot", json.dumps(OFFROAD_ALERTS["Offroad_IsTakingSnapshot"]))
+  if (not params.get_bool("IsOffroad")) or params.get_bool("IsTakingSnapshot"):
+    print("Already taking snapshot")
+    return None, None
+
+  params.put_bool("IsTakingSnapshot", True)
+  set_offroad_alert("Offroad_IsTakingSnapshot", True)
   time.sleep(2.0)  # Give thermald time to read the param, or if just started give camerad time to start
 
   # Check if camerad is already started
-  ps = subprocess.Popen("ps | grep camerad", shell=True, stdout=subprocess.PIPE)
-  ret = list(filter(lambda x: 'grep ' not in x, ps.communicate()[0].decode('utf-8').strip().split("\n")))
-  if len(ret) > 0:
-    params.put("IsTakingSnapshot", "0")
-    params.delete("Offroad_IsTakingSnapshot")
-    return None
+  try:
+    subprocess.check_call(["pgrep", "camerad"])
 
-  proc = subprocess.Popen(os.path.join(BASEDIR, "selfdrive/camerad/camerad"), cwd=os.path.join(BASEDIR, "selfdrive/camerad"))
+    print("Camerad already running")
+    params.put_bool("IsTakingSnapshot", False)
+    params.delete("Offroad_IsTakingSnapshot")
+    return None, None
+  except subprocess.CalledProcessError:
+    pass
+
+  env = os.environ.copy()
+  env["SEND_ROAD"] = "1"
+  env["SEND_WIDE_ROAD"] = "1"
+
+  if front_camera_allowed:
+    env["SEND_DRIVER"] = "1"
+
+  proc = subprocess.Popen(os.path.join(BASEDIR, "selfdrive/camerad/camerad"),
+                          cwd=os.path.join(BASEDIR, "selfdrive/camerad"), env=env)
   time.sleep(3.0)
 
-  ret = None
-  start_time = time.time()
-  while time.time() - start_time < 5.0:
-    try:
-      ipc = VisionIPC()
-      pic = ipc.get()
-      del ipc
-
-      if front_camera_allowed:
-        ipc_front = VisionIPC(front=True)
-        fpic = ipc_front.get()
-        del ipc_front
-      else:
-        fpic = None
-
-      ret = pic, fpic
-      break
-    except Exception:
-      time.sleep(1)
+  frame = "wideRoadCameraState" if TICI else "roadCameraState"
+  front_frame = "driverCameraState" if front_camera_allowed else None
+  rear, front = get_snapshots(frame, front_frame)
 
   proc.send_signal(signal.SIGINT)
   proc.communicate()
 
-  params.put("IsTakingSnapshot", "0")
-  params.delete("Offroad_IsTakingSnapshot")
-  return ret
+  params.put_bool("IsTakingSnapshot", False)
+  set_offroad_alert("Offroad_IsTakingSnapshot", False)
+
+  if not front_camera_allowed:
+    front = None
+
+  return rear, front
 
 
 if __name__ == "__main__":
   pic, fpic = snapshot()
-  print(pic.shape)
-  jpeg_write("/tmp/back.jpg", pic)
-  jpeg_write("/tmp/front.jpg", fpic)
+  if pic is not None:
+    print(pic.shape)
+    jpeg_write("/tmp/back.jpg", pic)
+    jpeg_write("/tmp/front.jpg", fpic)
+  else:
+    print("Error taking snapshot")

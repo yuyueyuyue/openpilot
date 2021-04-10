@@ -1,53 +1,15 @@
+#!/usr/bin/env python3
 import os
 import sys
-import gzip
-import zlib
-import json
 import bz2
-import tempfile
-import requests
-import subprocess
-from aenum import Enum
+import urllib.parse
 import capnp
-import numpy as np
 
-import platform
-
-from tools.lib.exceptions import DataUnreadableError
 try:
   from xx.chffr.lib.filereader import FileReader
 except ImportError:
   from tools.lib.filereader import FileReader
-from tools.lib.log_util import convert_old_pkt_to_new
 from cereal import log as capnp_log
-
-OP_PATH = os.path.dirname(os.path.dirname(capnp_log.__file__))
-
-def index_log(fn):
-  index_log_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "index_log")
-  index_log = os.path.join(index_log_dir, "index_log")
-  phonelibs_dir = os.path.join(OP_PATH, 'phonelibs')
-
-  subprocess.check_call(["make", "PHONELIBS=" + phonelibs_dir], cwd=index_log_dir, stdout=subprocess.DEVNULL)
-
-  try:
-    dat = subprocess.check_output([index_log, fn, "-"])
-  except subprocess.CalledProcessError:
-    raise DataUnreadableError("%s capnp is corrupted/truncated" % fn)
-  return np.frombuffer(dat, dtype=np.uint64)
-
-def event_read_multiple_bytes(dat):
-  with tempfile.NamedTemporaryFile() as dat_f:
-    dat_f.write(dat)
-    dat_f.flush()
-    idx = index_log(dat_f.name)
-
-  end_idx = np.uint64(len(dat))
-  idx = np.append(idx, end_idx)
-
-  return [capnp_log.Event.from_bytes(dat[idx[i]:idx[i+1]])
-          for i in range(len(idx)-1)]
-
 
 # this is an iterator itself, and uses private variables from LogReader
 class MultiLogIterator(object):
@@ -78,7 +40,8 @@ class MultiLogIterator(object):
       self._idx += 1
     else:
       self._idx = 0
-      self._current_log = next(i for i in range(self._current_log + 1, len(self._log_readers) + 1) if i == len(self._log_readers) or self._log_paths[i] is not None)
+      self._current_log = next(i for i in range(self._current_log + 1, len(self._log_readers) + 1)
+                               if i == len(self._log_readers) or self._log_paths[i] is not None)
       # wraparound
       if self._current_log == len(self._log_readers):
         if self._wraparound:
@@ -90,8 +53,6 @@ class MultiLogIterator(object):
     while 1:
       lr = self._log_reader(self._current_log)
       ret = lr._ents[self._idx]
-      if lr._do_conversion:
-        ret = convert_old_pkt_to_new(ret, lr.data_version)
       self._inc()
       return ret
 
@@ -116,74 +77,28 @@ class MultiLogIterator(object):
 
 class LogReader(object):
   def __init__(self, fn, canonicalize=True, only_union_types=False):
-    _, ext = os.path.splitext(fn)
     data_version = None
-
+    _, ext = os.path.splitext(urllib.parse.urlparse(fn).path)
     with FileReader(fn) as f:
       dat = f.read()
 
-    # decompress file
-    if ext == ".gz" and ("log_" in fn or "log2" in fn):
-      dat = zlib.decompress(dat, zlib.MAX_WBITS|32)
+    if ext == "":
+      # old rlogs weren't bz2 compressed
+      ents = capnp_log.Event.read_multiple_bytes(dat)
     elif ext == ".bz2":
       dat = bz2.decompress(dat)
-    elif ext == ".7z":
-      if platform.system() == "Darwin":
-        os.environ["LA_LIBRARY_FILEPATH"] = "/usr/local/opt/libarchive/lib/libarchive.dylib"
-      import libarchive.public
-      with libarchive.public.memory_reader(dat) as aa:
-        mdat = []
-        for it in aa:
-          for bb in it.get_blocks():
-            mdat.append(bb)
-      dat = ''.join(mdat)
-
-    # TODO: extension shouln't be a proxy for DeviceType
-    if ext == "":
-      if dat[0] == "[":
-        needs_conversion = True
-        ents = [json.loads(x) for x in dat.strip().split("\n")[:-1]]
-        if "_" in fn:
-          data_version = fn.split("_")[1]
-      else:
-        # old rlogs weren't bz2 compressed
-        needs_conversion = False
-        ents = event_read_multiple_bytes(dat)
-    elif ext == ".gz":
-      if "log_" in fn:
-        # Zero data file.
-        ents = [json.loads(x) for x in dat.strip().split("\n")[:-1]]
-        needs_conversion = True
-      elif "log2" in fn:
-        needs_conversion = False
-        ents = event_read_multiple_bytes(dat)
-      else:
-        raise Exception("unknown extension")
-    elif ext == ".bz2":
-      needs_conversion = False
-      ents = event_read_multiple_bytes(dat)
-    elif ext == ".7z":
-      needs_conversion = True
-      ents = [json.loads(x) for x in dat.strip().split("\n")]
+      ents = capnp_log.Event.read_multiple_bytes(dat)
     else:
-      raise Exception("unknown extension")
+      raise Exception(f"unknown extension {ext}")
 
-    if needs_conversion:
-      # TODO: should we call convert_old_pkt_to_new to generate this?
-      self._ts = [x[0][0]*1e9 for x in ents]
-    else:
-      self._ts = [x.logMonoTime for x in ents]
-
+    self._ents = list(ents)
+    self._ts = [x.logMonoTime for x in self._ents]
     self.data_version = data_version
-    self._do_conversion = needs_conversion and canonicalize
     self._only_union_types = only_union_types
-    self._ents = ents
 
   def __iter__(self):
     for ent in self._ents:
-      if self._do_conversion:
-        yield convert_old_pkt_to_new(ent, self.data_version)
-      elif self._only_union_types:
+      if self._only_union_types:
         try:
           ent.which()
           yield ent
@@ -192,13 +107,11 @@ class LogReader(object):
       else:
         yield ent
 
-def load_many_logs_canonical(log_paths):
-  """Load all logs for a sequence of log paths."""
-  for log_path in log_paths:
-    for msg in LogReader(log_path):
-      yield msg
-
 if __name__ == "__main__":
+  import codecs
+  # capnproto <= 0.8.0 throws errors converting byte data to string
+  # below line catches those errors and replaces the bytes with \x__
+  codecs.register_error("strict", codecs.backslashreplace_errors)
   log_path = sys.argv[1]
   lr = LogReader(log_path)
   for msg in lr:

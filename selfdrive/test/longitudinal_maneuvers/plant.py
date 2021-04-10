@@ -8,6 +8,7 @@ import numpy as np
 
 from opendbc import DBC_PATH
 
+from cereal import car, log
 from common.realtime import Ratekeeper
 from selfdrive.config import Conversions as CV
 import cereal.messaging as messaging
@@ -29,7 +30,7 @@ CP = CarInterface.get_params(CAR.CIVIC, {0: {0x201: 6}, 1: {}, 2: {}, 3: {}})
 def can_cksum(mm):
   s = 0
   for c in mm:
-    s += (c>>4)
+    s += (c >> 4)
     s += c & 0xF
   s = 8-s
   s %= 0x10
@@ -45,11 +46,11 @@ def car_plant(pos, speed, grade, gas, brake):
   mass = 1700
   aero_cd = 0.3
   force_peak = mass*3.
-  force_brake_peak = -mass*10.     #1g
+  force_brake_peak = -mass*10.  # 1g
   power_peak = 100000   # 100kW
   speed_base = power_peak/force_peak
   rolling_res = 0.01
-  g = 9.81
+  gravity = 9.81
   frontal_area = 2.2
   air_density = 1.225
   gas_to_peak_linear_slope = 3.33
@@ -60,17 +61,17 @@ def car_plant(pos, speed, grade, gas, brake):
   #*** longitudinal model ***
   # find speed where peak torque meets peak power
   force_brake = brake * force_brake_peak * brake_to_peak_linear_slope
-  if speed < speed_base: # torque control
+  if speed < speed_base:  # torque control
     force_gas = gas * force_peak * gas_to_peak_linear_slope
-  else: # power control
+  else:  # power control
     force_gas = gas * power_peak / speed * gas_to_peak_linear_slope
 
-  force_grade = - grade * mass  # positive grade means uphill
+  force_grade = - np.sin(np.arctan(grade)) * mass * gravity
 
   creep_accel = np.interp(speed, creep_accel_bp, creep_accel_v)
   force_creep = creep_accel * mass
 
-  force_resistance = -(rolling_res * mass * g + 0.5 * speed**2 * aero_cd * air_density * frontal_area)
+  force_resistance = -(rolling_res * mass * gravity + 0.5 * speed**2 * aero_cd * air_density * frontal_area)
   force = force_gas + force_brake + force_resistance + force_grade + force_creep
   acceleration = force / mass
 
@@ -109,16 +110,18 @@ class Plant():
     self.rate = rate
 
     if not Plant.messaging_initialized:
+      Plant.pm = messaging.PubMaster(['roadCameraState', 'driverCameraState', 'ubloxRaw'])
       Plant.logcan = messaging.pub_sock('can')
       Plant.sendcan = messaging.sub_sock('sendcan')
-      Plant.model = messaging.pub_sock('model')
+      Plant.model = messaging.pub_sock('modelV2')
       Plant.live_params = messaging.pub_sock('liveParameters')
-      Plant.health = messaging.pub_sock('health')
-      Plant.thermal = messaging.pub_sock('thermal')
-      Plant.driverState = messaging.pub_sock('driverState')
+      Plant.live_location_kalman = messaging.pub_sock('liveLocationKalman')
+      Plant.pandaState = messaging.pub_sock('pandaState')
+      Plant.deviceState = messaging.pub_sock('deviceState')
+      Plant.driverMonitoringState = messaging.pub_sock('driverMonitoringState')
       Plant.cal = messaging.pub_sock('liveCalibration')
       Plant.controls_state = messaging.sub_sock('controlsState')
-      Plant.plan = messaging.sub_sock('plan')
+      Plant.plan = messaging.sub_sock('longitudinalPlan')
       Plant.messaging_initialized = True
 
     self.frame = 0
@@ -129,7 +132,7 @@ class Plant():
     self.esp_disabled = 0
     self.main_on = 1
     self.user_gas = 0
-    self.computer_brake,self.user_brake = 0,0
+    self.computer_brake, self.user_brake = 0, 0
     self.brake_pressed = 0
     self.angle_steer_rate = 0
     self.distance, self.distance_prev = 0., 0.
@@ -161,9 +164,10 @@ class Plant():
     Plant.logcan.close()
     Plant.model.close()
     Plant.live_params.close()
+    Plant.live_location_kalman.close()
 
   def speed_sensor(self, speed):
-    if speed<0.3:
+    if speed < 0.3:
       return 0
     else:
       return speed * CV.MS_TO_KPH
@@ -171,7 +175,7 @@ class Plant():
   def current_time(self):
     return float(self.rk.frame) / self.rate
 
-  def step(self, v_lead=0.0, cruise_buttons=None, grade=0.0, publish_model = True):
+  def step(self, v_lead=0.0, cruise_buttons=None, grade=0.0, publish_model=True):
     gen_signals, gen_checks = get_can_signals(CP)
     sgs = [s[0] for s in gen_signals]
     msgs = [s[1] for s in gen_signals]
@@ -195,7 +199,7 @@ class Plant():
 
     fcw = None
     for a in messaging.drain_sock(Plant.plan):
-      if a.plan.fcw:
+      if a.longitudinalPlan.fcw:
         fcw = True
 
     if self.cp.vl[0x1fa]['COMPUTER_BRAKE_REQUEST']:
@@ -237,7 +241,8 @@ class Plant():
 
     # print at 5hz
     if (self.frame % (self.rate//5)) == 0:
-      print("%6.2f m  %6.2f m/s  %6.2f m/s2   %.2f ang   gas: %.2f  brake: %.2f  steer: %5.2f     lead_rel: %6.2f m  %6.2f m/s" % (distance, speed, acceleration, self.angle_steer, gas, brake, steer_torque, d_rel, v_rel))
+      print("%6.2f m  %6.2f m/s  %6.2f m/s2   %.2f ang   gas: %.2f  brake: %.2f  steer: %5.2f     lead_rel: %6.2f m  %6.2f m/s"
+            % (distance, speed, acceleration, self.angle_steer, gas, brake, steer_torque, d_rel, v_rel))
 
     # ******** publish the car ********
     vls_tuple = namedtuple('vls', [
@@ -277,13 +282,13 @@ class Plant():
     vls = vls_tuple(
            self.speed_sensor(speed),
            self.speed_sensor(speed), self.speed_sensor(speed), self.speed_sensor(speed), self.speed_sensor(speed),
-           self.angle_steer, self.angle_steer_rate, 0, 0,#Steer torque sensor
+           self.angle_steer, self.angle_steer_rate, 0, 0,  # Steer torque sensor
            0, 0,  # Blinkers
            self.gear_choice,
            speed != 0,
            self.brake_error, self.brake_error,
            not self.seatbelt, self.seatbelt,  # Seatbelt
-           self.brake_pressed, 0., #Brake pressed, Brake switch
+           self.brake_pressed, 0.,  # Brake pressed, Brake switch
            cruise_buttons,
            self.esp_disabled,
            0,  # HUD lead
@@ -339,9 +344,9 @@ class Plant():
     # TODO: use the DBC
     if self.frame % 5 == 0:
       radar_state_msg = b'\x79\x00\x00\x00\x00\x00\x00\x00'
-      radar_msg = to_3_byte(d_rel*16.0) + \
-                  to_3_byte(int(lateral_pos_rel*16.0)&0x3ff) + \
-                  to_3s_byte(int(v_rel*32.0)) + \
+      radar_msg = to_3_byte(d_rel * 16.0) + \
+                  to_3_byte(int(lateral_pos_rel * 16.0) & 0x3ff) + \
+                  to_3s_byte(int(v_rel * 32.0)) + \
                   b"0f00000"
 
       radar_msg = binascii.unhexlify(radar_msg)
@@ -355,10 +360,8 @@ class Plant():
     msg_data = fix(msg_data, 0xe4)
     can_msgs.append([0xe4, 0, msg_data, 2])
 
-
     # Fake sockets that controlsd subscribes to
-    live_parameters = messaging.new_message()
-    live_parameters.init('liveParameters')
+    live_parameters = messaging.new_message('liveParameters')
     live_parameters.liveParameters.valid = True
     live_parameters.liveParameters.sensorValid = True
     live_parameters.liveParameters.posenetValid = True
@@ -366,35 +369,31 @@ class Plant():
     live_parameters.liveParameters.stiffnessFactor = 1.0
     Plant.live_params.send(live_parameters.to_bytes())
 
-    driver_state = messaging.new_message()
-    driver_state.init('driverState')
-    driver_state.driverState.faceOrientation = [0.] * 3
-    driver_state.driverState.facePosition = [0.] * 2
-    Plant.driverState.send(driver_state.to_bytes())
+    dmon_state = messaging.new_message('driverMonitoringState')
+    dmon_state.driverMonitoringState.isDistracted = False
+    Plant.driverMonitoringState.send(dmon_state.to_bytes())
 
-    health = messaging.new_message()
-    health.init('health')
-    health.health.controlsAllowed = True
-    Plant.health.send(health.to_bytes())
+    pandaState = messaging.new_message('pandaState')
+    pandaState.pandaState.safetyModel = car.CarParams.SafetyModel.hondaNidec
+    pandaState.pandaState.controlsAllowed = True
+    Plant.pandaState.send(pandaState.to_bytes())
 
-    thermal = messaging.new_message()
-    thermal.init('thermal')
-    thermal.thermal.freeSpace = 1.
-    thermal.thermal.batteryPercent = 100
-    Plant.thermal.send(thermal.to_bytes())
+    deviceState = messaging.new_message('deviceState')
+    deviceState.deviceState.freeSpacePercent = 100
+    deviceState.deviceState.batteryPercent = 100
+    Plant.deviceState.send(deviceState.to_bytes())
+
+    live_location_kalman = messaging.new_message('liveLocationKalman')
+    live_location_kalman.liveLocationKalman.inputsOK = True
+    live_location_kalman.liveLocationKalman.gpsOK = True
+    Plant.live_location_kalman.send(live_location_kalman.to_bytes())
 
     # ******** publish a fake model going straight and fake calibration ********
     # note that this is worst case for MPC, since model will delay long mpc by one time step
     if publish_model and self.frame % 5 == 0:
-      md = messaging.new_message()
-      cal = messaging.new_message()
-      md.init('model')
-      cal.init('liveCalibration')
-      md.model.frameId = 0
-      for x in [md.model.path, md.model.leftLane, md.model.rightLane]:
-        x.points = [0.0]*50
-        x.prob = 1.0
-        x.std = 1.0
+      md = messaging.new_message('modelV2')
+      cal = messaging.new_message('liveCalibration')
+      md.modelV2.frameId = 0
 
       if self.lead_relevancy:
         d_rel = np.maximum(0., distance_lead - distance)
@@ -405,15 +404,11 @@ class Plant():
         v_rel = 0.
         prob = 0.0
 
-      md.model.lead.dist = float(d_rel)
-      md.model.lead.prob = prob
-      md.model.lead.relY = 0.0
-      md.model.lead.relYStd = 1.
-      md.model.lead.relVel = float(v_rel)
-      md.model.lead.relVelStd = 1.
-      md.model.lead.relA = 0.0
-      md.model.lead.relAStd = 10.
-      md.model.lead.std = 1.0
+      lead = log.ModelDataV2.LeadDataV2.new_message()
+      lead.xyva = [float(d_rel), 0.0, float(v_rel), 0.0]
+      lead.xyvaStd = [1.0, 1.0, 1.0, 1.0]
+      lead.prob = prob
+      md.modelV2.leads = [lead, lead]
 
       cal.liveCalibration.calStatus = 1
       cal.liveCalibration.calPerc = 100
@@ -421,6 +416,11 @@ class Plant():
       # fake values?
       Plant.model.send(md.to_bytes())
       Plant.cal.send(cal.to_bytes())
+      for s in Plant.pm.sock.keys():
+        try:
+          Plant.pm.send(s, messaging.new_message(s))
+        except Exception:
+          Plant.pm.send(s, messaging.new_message(s, 1))
 
     Plant.logcan.send(can_list_to_can_capnp(can_msgs))
 

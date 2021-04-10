@@ -1,47 +1,64 @@
-#ifndef _SELFDRIVE_COMMON_PARAMS_H_
-#define _SELFDRIVE_COMMON_PARAMS_H_
+#pragma once
 
 #include <stddef.h>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <map>
+#include <string>
+#include <sstream>
 
 #define ERR_NO_VALUE -33
 
-int write_db_value(const char* params_path, const char* key, const char* value,
-                   size_t value_size);
+class Params {
+private:
+  std::string params_path;
 
-// Reads a value from the params database.
-// Inputs:
-//  params_path: The path of the database, or NULL to use the default.
-//  key: The key to read.
-//  value: A pointer where a newly allocated string containing the db value will
-//         be written.
-//  value_sz: A pointer where the size of value will be written. Does not
-//            include the NULL terminator.
-//
-// Returns: Negative on failure, otherwise 0.
-int read_db_value(const char* params_path, const char* key, char** value,
-                  size_t* value_sz);
+public:
+  Params(bool persistent_param = false);
+  Params(const std::string &path);
 
-// Delete a value from the params database.
-// Inputs are the same as read_db_value, without value and value_sz.
-int delete_db_value(const char* params_path, const char* key);
+  // Delete a value
+  int remove(const char *key);
+  inline int remove(const std::string &key) {
+    return remove (key.c_str());
+  }
 
-// Reads a value from the params database, blocking until successful.
-// Inputs are the same as read_db_value.
-void read_db_value_blocking(const char* params_path, const char* key,
-                            char** value, size_t* value_sz);
+  // read all values
+  int read_db_all(std::map<std::string, std::string> *params);
 
-#ifdef __cplusplus
-}  // extern "C"
-#endif
+  // read a value
+  std::string get(const char *key, bool block = false);
 
-#ifdef __cplusplus
-#include <map>
-#include <string>
-int read_db_all(const char* params_path, std::map<std::string, std::string> *params);
-#endif
+  inline std::string get(const std::string &key, bool block = false) {
+    return get(key.c_str(), block);
+  }
 
-#endif  // _SELFDRIVE_COMMON_PARAMS_H_
+  template <class T>
+  std::optional<T> get(const char *key, bool block = false) {
+    std::istringstream iss(get(key, block));
+    T value{};
+    iss >> value;
+    return iss.fail() ? std::nullopt : std::optional(value);
+  }
+
+  inline bool getBool(const std::string &key) {
+    return getBool(key.c_str());
+  }
+
+  inline bool getBool(const char *key) {
+    return get(key) == "1";
+  }
+
+  // write a value
+  int put(const char* key, const char* val, size_t value_size);
+
+  inline int put(const std::string &key, const std::string &val) {
+    return put(key.c_str(), val.data(), val.size());
+  }
+
+  inline int putBool(const char *key, bool val) {
+    return put(key, val ? "1" : "0", 1);
+  }
+
+  inline int putBool(const std::string &key, bool val) {
+    return putBool(key.c_str(), val);
+  }
+};

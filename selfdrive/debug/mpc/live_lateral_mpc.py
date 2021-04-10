@@ -55,11 +55,10 @@ def mpc_vwr_thread(addr="127.0.0.1"):
   aa.invert_xaxis()
   plt.show()
 
-
   # *** log ***
   livempc = messaging.sub_sock('liveMpc', addr=addr)
   model = messaging.sub_sock('model', addr=addr)
-  path_plan_sock = messaging.sub_sock('pathPlan', addr=addr)
+  path_plan_sock = messaging.sub_sock('lateralPlan', addr=addr)
 
   while 1:
     lMpc = messaging.recv_sock(livempc, wait=True)
@@ -71,20 +70,20 @@ def mpc_vwr_thread(addr="127.0.0.1"):
       l_poly = np.array(md.model.leftLane.poly)
       r_poly = np.array(md.model.rightLane.poly)
 
-      p_path_y = np.polyval(p_poly, path_x)
+      p_path_y = np.polyval(p_poly, path_x)  # lgtm[py/multiple-definition]
       l_path_y = np.polyval(r_poly, path_x)
       r_path_y = np.polyval(l_poly, path_x)
 
     if pp is not None:
-      p_path_y = np.polyval(pp.pathPlan.dPoly, path_x)
+      p_path_y = np.polyval(pp.lateralPlan.dPolyDEPRECATED, path_x)
       lineP.set_xdata(p_path_y)
       lineP.set_ydata(path_x)
 
     if lMpc is not None:
-      mpc_path_x  = list(lMpc.liveMpc.x)[1:]
-      mpc_path_y  = list(lMpc.liveMpc.y)[1:]
-      mpc_steer_angle  = list(lMpc.liveMpc.delta)[1:]
-      mpc_psi  = list(lMpc.liveMpc.psi)[1:]
+      mpc_path_x = list(lMpc.liveMpc.x)[1:]
+      mpc_path_y = list(lMpc.liveMpc.y)[1:]
+      mpc_steer_angle = list(lMpc.liveMpc.delta)[1:]
+      mpc_psi = list(lMpc.liveMpc.psi)[1:]
 
       line1.set_xdata(mpc_path_y)
       line1.set_ydata(mpc_path_x)

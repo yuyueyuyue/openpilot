@@ -2,7 +2,7 @@
 import os
 import sys
 
-from selfdrive.test.openpilotci_upload import upload_file
+from selfdrive.test.openpilotci import upload_file
 from selfdrive.test.process_replay.compare_logs import save_log
 from selfdrive.test.process_replay.process_replay import replay_process, CONFIGS
 from selfdrive.test.process_replay.test_processes import segments, get_segment
@@ -17,10 +17,12 @@ if __name__ == "__main__":
   ref_commit_fn = os.path.join(process_replay_dir, "ref_commit")
 
   ref_commit = get_git_commit()
+  if ref_commit is None:
+    raise Exception("couldn't get ref commit")
   with open(ref_commit_fn, "w") as f:
     f.write(ref_commit)
 
-  for segment in segments:
+  for car_brand, segment in segments:
     rlog_fn = get_segment(segment)
 
     if rlog_fn is None:
@@ -37,6 +39,5 @@ if __name__ == "__main__":
       if not no_upload:
         upload_file(log_fn, os.path.basename(log_fn))
         os.remove(log_fn)
-    os.remove(rlog_fn)
 
   print("done")

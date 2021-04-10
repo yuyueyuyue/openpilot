@@ -1,294 +1,83 @@
-openpilot-tools
+openpilot tools
 ============
 
-Repo which contains tools to facilitate development and debugging of [openpilot](openpilot.comma.ai).
-
-![Imgur](https://i.imgur.com/IdfBgwK.jpg)
-
-
-Table of Contents
+SSH
 ============
 
-<!--ts-->
- * [Requirements](#requirements)
- * [Setup](#setup)
- * [Tool examples](#tool-examples)
-   * [Replay driving data](#replay-driving-data)
-   * [Debug car controls](#debug-car-controls)
-   * [Stream replayed CAN messages to EON](#stream-replayed-can-messages-to-eon)
-   * [Stream EON video data to a PC](#stream-eon-video-data-to-a-pc)
- * [Welcomed contributions](#welcomed-contributions)
-<!--te-->
+Connecting to your comma device using [SSH](ssh/README.md)
 
 
-Requirements
+System requirements
 ============
 
-openpilot-tools and the following setup steps are developed and tested on Ubuntu 16.04, MacOS 10.14.2 and Python 3.7.3.
+openpilot is developed and tested on **Ubuntu 20.04**, which is the primary development target aside from the [supported embdedded hardware](https://github.com/commaai/openpilot#supported-hardware). We also have a CI test to verify that openpilot builds on macOS, but the tools are untested. For the best experience, stick to Ubuntu 20.04, otherwise openpilot and the tools should work with minimal to no modifications on macOS and other Linux systems.
 
 Setup
 ============
+1. Clone openpilot into home directory:
+```
+cd ~
+
+git clone --recurse-submodule https://github.com/commaai/openpilot.git
+
+```
+
+2. Run setup script:
+
+Ubuntu:
+```
+openpilot/tools/ubuntu_setup.sh
+```
+MacOS:
+```
+openpilot/tools/mac_setup.sh
+```
+
+3. Compile openpilot by running SCons in openpilot directory
+```
+cd openpilot && scons -j$(nproc)
+```
+
+4. Try out some tools!
 
 
-1. Install native dependencies (Mac and Ubuntu sections listed below)
-
-    **Ubuntu**
-
-    - core tools
-      ```bash
-      sudo apt install git curl python-pip
-      sudo pip install --upgrade pip>=18.0 pipenv
-      ```
-
-    - ffmpeg (tested with 3.3.2)
-      ```bash
-      sudo apt install ffmpeg libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev libswscale-dev libavresample-dev libavfilter-dev
-      ```
-
-    - build tools
-      ```bash
-      sudo apt install autoconf automake clang clang-3.8 libtool pkg-config build-essential
-      ```
-
-    - libarchive-dev (tested with 3.1.2-11ubuntu0.16.04.4)
-      ```bash
-      sudo apt install libarchive-dev
-      ```
-
-    - qt python binding (tested with python-qt4, 4.11.4+dfsg-1build4)
-      ```bash
-      sudo apt install python-qt4
-      ```
-
-    - zmq 4.2.3 (required for replay)
-      ```bash
-      curl -LO https://github.com/zeromq/libzmq/releases/download/v4.2.3/zeromq-4.2.3.tar.gz
-      tar xfz zeromq-4.2.3.tar.gz
-      cd zeromq-4.2.3
-      ./autogen.sh
-      ./configure CPPFLAGS=-DPIC CFLAGS=-fPIC CXXFLAGS=-fPIC LDFLAGS=-fPIC --disable-shared --enable-static
-      make
-      sudo make install
-      ```
-
-    **Mac**
-
-    - brew
-      ``` bash
-      /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
-      ```
-
-    - core tools
-      ``` bash
-      brew install git
-      sudo pip install --upgrade pip pipenv
-      xcode-select --install
-      ```
-
-    - ffmpeg (tested with 3.4.1)
-        ```bash
-        brew install ffmpeg
-        ```
-
-    - build tools
-        ```bash
-        brew install autoconf automake libtool llvm pkg-config
-        ```
-
-    - libarchive-dev (tested with 3.3.3)
-        ```bash
-        brew install libarchive
-        ```
-
-    - qt for Mac
-        ```bash
-        brew install qt
-        ```
-
-    - zmq 4.3.1 (required for replay)
-        ```bash
-        brew install zeromq
-        ```
-
-2. Install Cap'n Proto
-
-    ```bash
-    curl -O https://capnproto.org/capnproto-c++-0.6.1.tar.gz
-    tar xvf capnproto-c++-0.6.1.tar.gz
-    cd capnproto-c++-0.6.1
-    ./configure --prefix=/usr/local CPPFLAGS=-DPIC CFLAGS=-fPIC CXXFLAGS=-fPIC LDFLAGS=-fPIC --disable-shared --enable-static
-    make -j4
-    sudo make install
-
-    cd ..
-    git clone https://github.com/commaai/c-capnproto.git
-    cd c-capnproto
-    git submodule update --init --recursive
-    autoreconf -f -i -s
-    CFLAGS="-fPIC" ./configure --prefix=/usr/local
-    make -j4
-    sudo make install
-    ```
-
-
-
-
-2. Clone openpilot if you haven't already
-
-    ```bash
-    git clone https://github.com/commaai/openpilot.git
-    cd openpilot
-    pipenv install # Install dependencies in a virtualenv
-    pipenv shell # Activate the virtualenv
-    ```
-
-    **For Mac users**
-
-    Recompile longitudinal_mpc for mac
-
-    Navigate to:
-    ``` bash
-    cd selfdrive/controls/lib/longitudinal_mpc
-    make clean
-    make
-    ```
-
-3. Clone tools within openpilot, and install dependencies
-
-    ```bash
-    git clone https://github.com/commaai/openpilot-tools.git tools
-    cd tools
-    git checkout <tag>  # the tag must match the openpilot version you are using (see https://github.com/commaai/openpilot-tools/tags)
-    pip install -r requirements.txt # Install openpilot-tools dependencies in virtualenv
-    ```
-
-4. Add openpilot to your `PYTHONPATH`.
-
-    For bash users:
-    ```bash
-    echo 'export PYTHONPATH="$PYTHONPATH:<path-to-openpilot>"' >> ~/.bashrc
-    source ~/.bashrc
-    ```
-
-5. Add some folders to root
-    ```bash
-    sudo mkdir /data
-    sudo mkdir /data/params
-    sudo chown $USER /data/params
-    ```
-
-6. Try out some tools!
-
-
-Tool examples
+Tools
 ============
 
-
-Replay driving data
+[Plot logs](plotjuggler)
 -------------
 
-**Hardware needed**: none
-
-`unlogger.py` replays data collected with [chffrplus](https://github.com/commaai/chffrplus) or [openpilot](https://github.com/commaai/openpilot).
-
-You'll need to download log and camera files into a local directory. Download these from the footer of the comma [explorer](https://my.comma.ai) or SCP from your device.
-
-Usage:
-
-```
-python replay/unlogger.py <route-name> <path-to-data-directory>
-
-#Example:
-
-#python replay/unlogger.py '99c94dc769b5d96e|2018-11-14--13-31-42' /home/batman/unlogger_data
-
-#Within /home/batman/unlogger_data:
-#  99c94dc769b5d96e|2018-11-14--13-31-42--0--fcamera.hevc
-#  99c94dc769b5d96e|2018-11-14--13-31-42--0--rlog.bz2
-#  ...
-
-# In another terminal you can run a debug visualizer:
-python replay/ui.py   # Define the environmental variable HORIZONTAL is the ui layout is too tall
-```
-![Imgur](https://i.imgur.com/Yppe0h2.png)
+Easily plot openpilot logs with [PlotJuggler](https://github.com/facontidavide/PlotJuggler), an open source tool for visualizing time series data.
 
 
-Debug car controls
+[Run openpilot in a simulator](sim)
 -------------
 
-**Hardware needed**: [panda](panda.comma.ai), [giraffe](https://comma.ai/shop/products/giraffe/), joystick
-
-Use the panda's OBD-II port to connect with your car and a usb cable to connect the panda to your pc.
-Also, connect a joystick to your pc.
-
-`joystickd.py` runs a deamon that reads inputs from a joystick and publishes them over zmq.
-`boardd.py` sends the CAN messages from your pc to the panda.
-`debug_controls` is a mocked version of `controlsd.py` and uses input from a joystick to send controls to your car.
-
-Usage:
-```
-python carcontrols/joystickd.py
-
-# In another terminal:
-selfdrive/boardd/tests/boardd_old.py # Make sure the safety setting is hardcoded to ALL_OUTPUT
-
-# In another terminal:
-python carcontrols/debug_controls.py
-
-```
-![Imgur](steer.gif)
+Test openpilots performance in a simulated environment. The [CARLA simulator](https://github.com/carla-simulator/carla) allows you to set a variety of features like:
+* Weather
+* Environment physics
+* Cars
+* Traffic and pedestrians
 
 
-Stream replayed CAN messages to EON
+[Replay a drive](replay)
 -------------
 
-**Hardware needed**: 2 x [panda](panda.comma.ai), [debug board](https://comma.ai/shop/products/panda-debug-board/), [EON](https://comma.ai/shop/products/eon-gold-dashcam-devkit/).
-
-It is possible to replay CAN messages as they were recorded and forward them to a EON. 
-Connect 2 pandas to the debug board. A panda connects to the PC, the other panda connects to the EON.
-
-Usage:
-```
-# With MOCK=1 boardd will read logged can messages from a replay and send them to the panda.
-MOCK=1 selfdrive/boardd/tests/boardd_old.py
-
-# In another terminal:
-python replay/unlogger.py <route-name> <path-to-data-directory>
-
-```
-![Imgur](https://i.imgur.com/AcurZk8.jpg)
+Review video and log data from routes and stream CAN messages to your device.
 
 
-Stream EON video data to a PC
+[Debug car controls](carcontrols)
 -------------
 
-**Hardware needed**: [EON](https://comma.ai/shop/products/eon-gold-dashcam-devkit/), [comma Smays](https://comma.ai/shop/products/comma-smays-adapter/).
-
-You can connect your EON to your pc using the Ethernet cable provided with the comma Smays and you'll be able to stream data from your EON, in real time, with low latency. A useful application is being able to stream the raw video frames at 20fps, as captured by the EON's camera.
-
-Usage:
-```
-# ssh into the eon and run loggerd with the flag "--stream". In ../selfdrive/manager.py you can change:
-# ...
-# "loggerd": ("selfdrive/loggerd", ["./loggerd"]),
-# ...
-# with:
-# ...
-# "loggerd": ("selfdrive/loggerd", ["./loggerd", "--stream"]),
-# ...
-
-# On the PC:
-# To receive frames from the EON and re-publish them. Set PYGAME env variable if you want to display the video stream
-python streamer/streamerd.py
-```
-
-![Imgur](stream.gif)
+Use a joystick to control your car.
 
 
 Welcomed contributions
 =============
 
 * Documentation: code comments, better tutorials, etc..
-* Support for other platforms other than Ubuntu 16.04.
+* Support for other platforms other than Ubuntu 20.04.
 * Performance improvements: the tools have been developed on high-performance workstations (12+ logical cores with 32+ GB of RAM), so they are not optimized for running efficiently. For example, `ui.py` might not be able to run real-time on most PCs.
 * More tools: anything that you think might be helpful to others.
+
+![Imgur](https://i.imgur.com/IdfBgwK.jpg)

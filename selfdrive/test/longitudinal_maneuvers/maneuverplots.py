@@ -7,10 +7,10 @@ import pylab
 from selfdrive.config import Conversions as CV
 
 class ManeuverPlot():
-  def __init__(self, title = None):
+  def __init__(self, title=None):
     self.time_array = []
 
-    self.gas_array =  []
+    self.gas_array = []
     self.brake_array = []
     self.steer_torque_array = []
 
@@ -28,7 +28,6 @@ class ManeuverPlot():
     self.v_target_lead_array = []
     self.pid_speed_array = []
     self.cruise_speed_array = []
-    self.jerk_factor_array = []
 
     self.a_target_array = []
 
@@ -37,10 +36,10 @@ class ManeuverPlot():
     self.fcw_array = []
 
     self.title = title
-    
-  def add_data(self, time, gas, brake, steer_torque, distance, speed, 
-    acceleration, up_accel_cmd, ui_accel_cmd, uf_accel_cmd, d_rel, v_rel, 
-    v_lead, v_target_lead, pid_speed, cruise_speed, jerk_factor, a_target, fcw):
+
+  def add_data(self, time, gas, brake, steer_torque, distance, speed,
+    acceleration, up_accel_cmd, ui_accel_cmd, uf_accel_cmd, d_rel, v_rel,
+    v_lead, v_target_lead, pid_speed, cruise_speed, a_target, fcw):
     self.time_array.append(time)
     self.gas_array.append(gas)
     self.brake_array.append(brake)
@@ -57,10 +56,8 @@ class ManeuverPlot():
     self.v_target_lead_array.append(v_target_lead)
     self.pid_speed_array.append(pid_speed)
     self.cruise_speed_array.append(cruise_speed)
-    self.jerk_factor_array.append(jerk_factor)
     self.a_target_array.append(a_target)
     self.fcw_array.append(fcw)
-
 
   def write_plot(self, path, maneuver_name):
     # title = self.title or maneuver_name
@@ -70,7 +67,7 @@ class ManeuverPlot():
     if not os.path.exists(path + "/" + maneuver_name):
       os.makedirs(path + "/" + maneuver_name)
     plt_num = 0
-    
+
     # speed chart ===================
     plt_num += 1
     plt.figure(plt_num)
@@ -140,4 +137,3 @@ class ManeuverPlot():
     pylab.savefig("/".join([path, maneuver_name, 'distance.svg']), dpi=1000)
 
     plt.close("all")
-

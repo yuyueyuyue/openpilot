@@ -4,6 +4,8 @@ import sys
 import argparse
 import json
 from hexdump import hexdump
+import codecs
+codecs.register_error("strict", codecs.backslashreplace_errors)
 
 from cereal import log
 import cereal.messaging as messaging
@@ -29,14 +31,14 @@ if __name__ == "__main__":
   poller = messaging.Poller()
 
   for m in args.socket if len(args.socket) > 0 else service_list:
-    sock = messaging.sub_sock(m, poller, addr=args.addr)
+    messaging.sub_sock(m, poller, addr=args.addr)
 
   values = None
   if args.values:
     values = [s.strip().split(".") for s in args.values.split(",")]
 
   while 1:
-    polld = poller.poll(1000)
+    polld = poller.poll(100)
     for sock in polld:
       msg = sock.receive()
       evt = log.Event.from_bytes(msg)
@@ -61,4 +63,11 @@ if __name__ == "__main__":
               print("{} = {}".format(".".join(value), item))
           print("")
         else:
-          print(evt)
+          try:
+            print(evt)
+          except UnicodeDecodeError:
+            w = evt.which()
+            s = f"( logMonoTime {evt.logMonoTime} \n  {w} = "
+            s += str(evt.__getattr__(w))
+            s += f"\n  valid = {evt.valid} )"
+            print(s)
